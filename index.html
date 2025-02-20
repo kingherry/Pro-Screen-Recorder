@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Screen Recorder Pro</title>
+    <style>
+        :root {
+            --primary-color: #2196f3;
+            --background-dark: #1a1a1a;
+            --text-light: #ffffff;
+            --border-color: #333333;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        body {
+            background-color: var(--background-dark);
+            color: var(--text-light);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .toolbar {
+            display: flex;
+            gap: 1rem;
+            margin: 1rem 0;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.8rem 1.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: opacity 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        button:disabled {
+            background-color: #666;
+            cursor: not-allowed;
+        }
+
+        .preview-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            margin: 1rem 0;
+            border: 2px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        #previewVideo {
+            width: 100%;
+            background-color: black;
+        }
+
+        .annotation-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+
+        .settings-panel {
+            background-color: #2a2a2a;
+            padding: 1rem;
+            border-radius: 4px;
+            margin: 1rem 0;
+        }
+
+        .timer {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-left: auto;
+        }
+
+        .recording-indicator {
+            width: 12px;
+            height: 12px;
+            background-color: #ff4444;
+            border-radius: 50%;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Web Screen Recorder Pro</h1>
+        
+        <div class="toolbar">
+            <button id="startBtn">
+                <span class="material-icons">Let's Start Recording</span>
+                - Record
+            </button>
+            
+            <button id="stopBtn" disabled>
+                <span class="material-icons">Let's Stop</span>
+                #
+            </button>
+
+            <div class="timer">
+                <span id="recordingTime">00:00:00</span>
+                <div class="recording-indicator" style="display: none;"></div>
+            </div>
+        </div>
+
+        <div class="settings-panel">
+            <label>
+                <input type="checkbox" id="audioToggle"> Include Microphone
+            </label>
+            <label>
+                Frame Rate:
+                <select id="frameRate">
+                    <option value="30">30 FPS</option>
+                    <option value="60">60 FPS</option>
+                </select>
+            </label>
+        </div>
+
+        <div class="preview-container">
+            <video id="previewVideo" autoplay muted></video>
+            <canvas id="annotationCanvas" class="annotation-canvas"></canvas>
+        </div>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let recordedChunks = [];
+        let startTime;
+        let timerInterval;
+        let canvasStream;
+
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const previewVideo = document.getElementById('previewVideo');
+        const audioToggle = document.getElementById('audioToggle');
+        const frameRateSelect = document.getElementById('frameRate');
+        const recordingTime = document.getElementById('recordingTime');
+        const annotationCanvas = document.getElementById('annotationCanvas');
+        
+        async function startRecording() {
+            try {
+                const displayStream = await navigator.mediaDevices.getDisplayMedia({
+                    video: { frameRate: parseInt(frameRateSelect.value) },
+                    audio: false
+                });
+
+                const audioStream = audioToggle.checked ? 
+                    await navigator.mediaDevices.getUserMedia({ audio: true }) : null;
+
+                // Setup canvas for annotations
+                const [track] = displayStream.getVideoTracks();
+                const settings = track.getSettings();
+                annotationCanvas.width = settings.width;
+                annotationCanvas.height = settings.height;
+
+                // Combine streams
+                const combinedStream = new MediaStream([
+                    ...displayStream.getVideoTracks(),
+                    ...(audioStream ? audioStream.getAudioTracks() : [])
+                ]);
+
+                previewVideo.srcObject = combinedStream;
+                
+                mediaRecorder = new MediaRecorder(combinedStream, {
+                    mimeType: 'video/webm; codecs=vp9',
+                    videoBitsPerSecond: 2500000
+                });
+
+                mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
+                mediaRecorder.onstop = saveRecording;
+                mediaRecorder.start();
+
+                startTime = Date.now();
+                updateTimer();
+                timerInterval = setInterval(updateTimer, 1000);
+                
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                document.querySelector('.recording-indicator').style.display = 'block';
+            } catch (err) {
+                console.error('Error starting recording:', err);
+            }
+        }
+
+        function stopRecording() {
+            mediaRecorder.stop();
+            clearInterval(timerInterval);
+            previewVideo.srcObject = null;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            document.querySelector('.recording-indicator').style.display = 'none';
+        }
+
+        function saveRecording() {
+            const blob = new Blob(recordedChunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `recording-${new Date().toISOString()}.webm`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            recordedChunks = [];
+        }
+
+        function updateTimer() {
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            const hours = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+            const minutes = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+            const seconds = String(elapsed % 60).padStart(2, '0');
+            recordingTime.textContent = `${hours}:${minutes}:${seconds}`;
+        }
+
+        // Annotation Drawing
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        const ctx = annotationCanvas.getContext('2d');
+        
+        annotationCanvas.addEventListener('mousedown', startDrawing);
+        annotationCanvas.addEventListener('mousemove', draw);
+        annotationCanvas.addEventListener('mouseup', stopDrawing);
+        annotationCanvas.addEventListener('mouseout', stopDrawing);
+
+        function startDrawing(e) {
+            isDrawing = true;
+            [lastX, lastY] = [e.offsetX, e.offsetY];
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(e.offsetX, e.offsetY);
+            ctx.stroke();
+            
+            [lastX, lastY] = [e.offsetX, e.offsetY];
+        }
+
+        function stopDrawing() {
+            isDrawing = false;
+        }
+
+        // Event Listeners
+        startBtn.addEventListener('click', startRecording);
+        stopBtn.addEventListener('click', stopRecording);
+      
+      audio: audioToggle.checked ? {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false
+} : false
+      
+      const mimeType = MediaRecorder.isTypeSupported('video/webm; codecs=vp9,opus') 
+    ? 'video/webm; codecs=vp9,opus'
+    : 'video/webm';
+      
+      videoBitsPerSecond: 5000000, // 5 Mbps
+audioBitsPerSecond: 128000   // 128 kbps
+      
+    </script>
+</body>
+</html>
